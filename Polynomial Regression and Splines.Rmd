@@ -1,0 +1,313 @@
+---
+title: "Polynomial Regression and Splines"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(readr)
+library(broom)
+library(ggplot2)
+library(tidymodels) 
+tidymodels_prefer() # Resolves conflicts, prefers tidymodel functions
+```
+
+## Create Data from Video
+
+```{r}
+set.seed(46)
+n <- 100
+train_data <- tibble(
+  x = runif(n, min = 0, max = 2*pi), 
+  y = sin(0.8*x) + rnorm(n, 0, 0.5))
+
+train_data %>%
+  ggplot(aes(x = x, y = y)) + 
+  geom_point() + 
+  theme_classic()
+
+train_data_cv10 <- vfold_cv(train_data, v = 10)
+
+set.seed(71)
+test_data <- tibble(
+    x = seq(0,2*pi,0.01),
+    y = sin(0.8*x) + rnorm(length(x), 0, 0.5)
+)
+```
+
+## Model Specification
+
+```{r}
+# Linear Regression Model
+lm_spec <- 
+  linear_reg() %>%
+  set_engine(engine = 'lm') %>%
+  set_mode('regression') 
+
+lm_rec <- recipe(y ~ x, data = train_data)
+```
+
+### Polynomial Model Specification (Global)
+
+#### Raw Polynomials
+
+```{r}
+?poly # base function used in step_poly
+
+poly2_rec_raw <- lm_rec %>%
+  step_poly(x, degree = 2, options = list(raw = TRUE)) 
+
+poly2_rec_raw %>% prep(train_data) %>% juice() #x_poly_1 = x, x_poly_2 = x^2
+
+poly3_rec_raw <- lm_rec %>%
+  step_poly(x, degree = 3, options = list(raw = TRUE))
+
+poly3_rec_raw %>% prep(train_data) %>% juice() #x_poly_1 = x, x_poly_2 = x^2, x_poly_3 = x^3
+```
+
+#### Orthogonal Polynomials
+
+```{r}
+# orthogonal polynomials: harder to interpret, but makes it easier to determine variable importance for each degree term
+
+poly2_rec <- lm_rec %>%
+  step_poly(x, degree = 2) # orthogonal polynomial
+
+poly2_rec %>% prep(train_data) %>% juice()
+
+poly3_rec <- lm_rec %>%
+  step_poly(x, degree = 3) # orthogonal polynomial
+
+poly4_rec<- lm_rec %>%
+  step_poly(x, degree = 4) # orthogonal polynomial
+```
+
+```{r}
+poly2_wf <- workflow() %>%
+  add_model(lm_spec) %>%
+  add_recipe(poly2_rec)
+
+poly3_wf <- workflow() %>%
+  add_model(lm_spec) %>%
+  add_recipe(poly3_rec)
+
+poly4_wf <- workflow() %>%
+  add_model(lm_spec) %>%
+  add_recipe(poly4_rec)
+```
+
+### Spline Model Specification (More Local)
+
+```{r}
+ns2_rec <- lm_rec %>%
+  step_ns(x, deg_free = 2) # natural cubic spline (higher deg_free means more knots)
+
+ns5_rec <- lm_rec %>%
+  step_ns(x, deg_free = 5) # natural cubic spline
+
+ns10_rec <- lm_rec %>%
+  step_ns(x, deg_free = 10) # natural cubic spline
+
+bs_rec <- lm_rec %>%
+  step_bs(x, options = list(knots = c(2, 4))) # general basis spline (cubic by default)
+```
+
+
+```{r}
+ns2_wf <- workflow() %>%
+  add_model(lm_spec) %>%
+  add_recipe(ns2_rec)
+
+ns5_wf <- workflow() %>%
+  add_model(lm_spec) %>%
+  add_recipe(ns5_rec)
+
+ns10_wf <- workflow() %>%
+  add_model(lm_spec) %>%
+  add_recipe(ns10_rec)
+
+bs_wf <- workflow() %>%
+  add_model(lm_spec) %>%
+  add_recipe(bs_rec)
+```
+
+## Fit Models
+
+```{r}
+fit_poly2_model <- poly2_wf %>%
+  fit(data = train_data)  
+
+fit_poly3_model <- poly3_wf %>%
+  fit(data = train_data)  
+
+fit_poly4_model <- poly4_wf %>%
+  fit(data = train_data)  
+
+fit_ns2_model <- ns2_wf %>%
+  fit(data = train_data)  
+
+fit_ns5_model <- ns5_wf %>%
+  fit(data = train_data)  
+
+fit_ns10_model <- ns10_wf %>%
+  fit(data = train_data)  
+
+fit_bs_model <- bs_wf %>%
+  fit(data = train_data)  
+```
+
+
+## Visualize Models
+
+```{r}
+truth_output <- tibble(x = seq(min(train_data$x),max(train_data$x),length=30),
+  .pred = sin(0.8*x)) %>%
+  mutate(model = 'truth')
+
+poly2_output <- fit_poly2_model %>%
+  predict(new_data = train_data, type = "conf_int") %>%
+  bind_cols(augment(fit_poly2_model, new_data = train_data)) %>%
+  mutate(model = 'poly2')
+
+poly3_output <- fit_poly3_model %>%
+  predict(new_data = train_data, type = "conf_int") %>%
+  bind_cols(augment(fit_poly3_model, new_data = train_data)) %>%
+  mutate(model = 'poly3')
+
+poly4_output <- fit_poly4_model %>%
+  predict(new_data = train_data, type = "conf_int") %>%
+  bind_cols(augment(fit_poly4_model, new_data = train_data)) %>%
+  mutate(model = 'poly4')
+
+
+bind_rows(truth_output,poly2_output,poly3_output,poly4_output) %>%
+  ggplot() + 
+  geom_point(aes(x = x , y = y)) +
+  geom_line(aes(x = x, y = .pred, color = model)) +
+  geom_line(aes(x = x, y = .pred_upper, color = model),linetype = 2) +
+  geom_line(aes(x = x, y = .pred_lower, color = model),linetype = 2) +
+  theme_classic()
+```
+
+```{r}
+ns2_output <- fit_ns2_model %>%
+  predict(new_data = train_data, type = "conf_int") %>%
+  bind_cols(augment(fit_ns2_model, new_data = train_data)) %>%
+  mutate(model = 'ns df=2') 
+
+ns5_output <- fit_ns5_model %>%
+  predict(new_data = train_data, type = "conf_int") %>%
+  bind_cols(augment(fit_ns5_model, new_data = train_data)) %>%
+  mutate(model = 'ns df=5') 
+
+ns10_output <- fit_ns10_model %>%
+  predict(new_data = train_data, type = "conf_int") %>%
+  bind_cols(augment(fit_ns10_model, new_data = train_data)) %>%
+  mutate(model = 'ns df=10') 
+
+bs_output <- fit_bs_model %>%
+  predict(new_data = train_data, type = "conf_int") %>%
+  bind_cols(augment(fit_bs_model, new_data = train_data)) %>%
+  mutate(model = 'bs') 
+
+
+bind_rows(truth_output,ns2_output,ns5_output,ns10_output) %>%
+  ggplot() + 
+  geom_point(aes(x = x , y = y)) +
+  geom_line(aes(x = x, y = .pred, color = model)) +
+  geom_line(aes(x = x, y = .pred_upper, color = model), linetype = 2) +
+  geom_line(aes(x = x, y = .pred_lower, color = model), linetype = 2) +
+  theme_classic()
+
+
+bind_rows(truth_output,bs_output) %>%
+  ggplot() + 
+  geom_point(aes(x = x , y = y)) +
+  geom_line(aes(x = x, y = .pred, color = model)) +
+  geom_line(aes(x = x, y = .pred_upper, color = model), linetype = 2) +
+  geom_line(aes(x = x, y = .pred_lower, color = model), linetype = 2) +
+  theme_classic()
+```
+
+## Choose/Evaluate Model
+
+### Cross Validation
+
+```{r}
+cv_poly2_model <- fit_resamples(poly2_wf,
+                    resamples = train_data_cv10
+               )  
+
+cv_poly3_model <- fit_resamples(poly3_wf,
+                    resamples = train_data_cv10
+               ) 
+
+cv_poly4_model <- fit_resamples(poly4_wf,
+                    resamples = train_data_cv10
+               ) 
+
+cv_ns2_model <- fit_resamples(ns2_wf,
+                    resamples = train_data_cv10
+               ) 
+
+cv_ns5_model <-  fit_resamples(ns5_wf,
+                    resamples = train_data_cv10
+               )   
+
+cv_ns10_model <-  fit_resamples(ns10_wf,
+                    resamples = train_data_cv10
+               )  
+
+cv_bs_model <- fit_resamples(bs_wf,
+                    resamples = train_data_cv10
+               ) 
+```
+
+### Workflow set
+
+```{r}
+wf_set <- workflow_set(
+  preproc = list(poly2 = poly2_rec,poly3 = poly3_rec,poly4 = poly4_rec,ns2 = ns2_rec,ns5 = ns5_rec,ns10 = ns10_rec,bs2 = bs_rec), #recipes
+  models = list(lm = lm_spec), #model specs
+  cross = TRUE) %>%
+  workflow_map(
+    "fit_resamples", 
+    resamples = train_data_cv10) 
+    
+wf_set %>% autoplot() + theme_classic()
+
+wf_set %>%  rank_results() %>% filter(.metric == 'rmse') 
+
+```
+
+### Compare on Test Set
+
+```{r}
+test_data %>%
+  bind_cols(predict(fit_poly2_model, new_data = test_data)) %>%
+  rmse(truth = y , estimate = .pred)
+
+test_data %>%
+  bind_cols(predict(fit_ns2_model, new_data = test_data)) %>%
+  rmse(truth = y , estimate = .pred)
+```
+
+
+```{r}
+test_data %>%
+  bind_cols(predict(fit_poly3_model, new_data = test_data)) %>%
+  rmse(truth = y , estimate = .pred)
+
+test_data %>%
+  bind_cols(predict(fit_poly4_model, new_data = test_data)) %>%
+  rmse(truth = y , estimate = .pred)
+
+test_data %>%
+  bind_cols(predict(fit_ns10_model, new_data = test_data)) %>%
+  rmse(truth = y , estimate = .pred)
+
+test_data %>%
+  bind_cols(predict(fit_bs_model, new_data = test_data)) %>%
+  rmse(truth = y , estimate = .pred)
+```

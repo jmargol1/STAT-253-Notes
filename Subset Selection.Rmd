@@ -1,0 +1,260 @@
+---
+title: "Subset Selection"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(readr)
+library(broom)
+library(ggplot2)
+library(tidymodels) 
+tidymodels_prefer() # Resolves conflicts, prefers tidymodel functions
+```
+
+## Read in Data
+
+```{r}
+homes <- read_tsv("http://sites.williams.edu/rdeveaux/files/2014/09/Saratoga.txt")
+
+head(homes)
+
+# Creating Factors - permanent change in data
+homes <- homes %>%
+  mutate(
+      Fuel.Type = factor(Fuel.Type, levels = 2:4, labels=c('gas','electric','oil')),
+      Heat.Type = factor(Heat.Type, levels = 2:4, labels=c('hot air','hot water/steam','electric')),
+      Sewer.Type = factor(Sewer.Type, levels = 1:3, labels = c('none','septic','public/commercial')),
+      AnyFireplace = if_else(Fireplaces > 0, 1,0))
+```
+
+## Model  Specification & Fold Creation
+
+```{r}
+lm_spec <- 
+    linear_reg() %>% # this is the type of model we are fitting
+    set_engine(engine = 'lm') %>% # you'll learn other engines to fit the model
+    set_mode('regression') # we'll talk about other modes such as classification later
+
+set.seed(123)
+homes_cv10 <- vfold_cv(homes, v = 10)
+```
+
+## Forward Selection
+
+See R Code below to manually code, but forward selection is not a recommended practice for variable/feature selection.
+
+### One Variable Models
+
+```{r}
+vars <- names(homes)
+vars <- vars[vars != 'Price']
+
+formulas <- map(paste0('Price ~ ',vars), ~ formula(.x)) # create list of 1 variable formulas
+names(formulas) <- vars
+
+homes_1varmodels <- workflow_set(preproc = formulas, models = list(lm = lm_spec))
+
+homes_1varmodels_fit <- homes_1varmodels %>%
+  workflow_map("fit_resamples", resamples = homes_cv10,  metrics = metric_set(rmse, rsq))
+
+homes_1varmodels_fit %>% 
+   rank_results() %>% 
+   filter(.metric == "rmse") %>% 
+   select(wflow_id, .config, rmse = mean, rank)
+```
+
+### Two Variable Models
+
+Choose second variable to complement best first variable
+
+```{r}
+vars <- vars[!(vars %in% c('Price','Living.Area'))]
+formulas <- map(paste0('Price ~ Living.Area + ',vars), ~ formula(.x)) #create list of 2 variable formulas
+names(formulas) <- paste0('Living.Area_',vars)
+
+homes_2varmodels <- workflow_set(preproc = formulas,models = list(lm = lm_spec))
+
+homes_2varmodels_fit <- homes_2varmodels %>%
+  workflow_map("fit_resamples", resamples = homes_cv10,  metrics = metric_set(rmse,rsq))
+
+homes_2varmodels_fit %>% 
+   rank_results() %>% 
+   filter(.metric == "rmse") %>% 
+   select(wflow_id, .config, rmse = mean, rank)
+```
+
+### Three Variable Models
+
+Choose third variable to complement best two variables
+
+```{r}
+vars <- vars[!(vars %in% c('Price','Living.Area','Land.Value'))]
+formulas <- map(paste0('Price ~ Living.Area + Land.Value + ',vars), ~formula(.x)) #create list of 3 variable formulas
+names(formulas) <- paste0('Living.Area_Land.Value_',vars)
+
+homes_3varmodels <- workflow_set(preproc = formulas, models = list(lm = lm_spec))
+
+homes_3varmodels_fit <- homes_3varmodels %>%
+  workflow_map("fit_resamples", resamples = homes_cv10,  metrics = metric_set(rmse,rsq))
+
+homes_3varmodels_fit %>% 
+   rank_results() %>% 
+   filter(.metric == "rmse") %>% 
+   select(wflow_id, .config, rmse = mean, rank)
+```
+
+### Four Variable Models
+
+Choose fourth variable to complement best three variables
+
+```{r}
+vars <- vars[!(vars %in% c('Price','Living.Area','Land.Value','Bathrooms'))]
+formulas <- map(paste0('Price ~ Living.Area + Land.Value + Bathrooms +',vars), ~ formula(.x)) #create list of 4 variable formulas
+names(formulas) <- paste0('Living.Area_Land.Value_Bathrooms_',vars)
+
+homes_4varmodels <- workflow_set(preproc = formulas,models = list(lm = lm_spec))
+
+homes_4varmodels_fit <- homes_4varmodels %>%
+  workflow_map("fit_resamples", resamples = homes_cv10,  metrics = metric_set(rmse,rsq))
+
+homes_4varmodels_fit %>% 
+   rank_results() %>% 
+   filter(.metric == "rmse") %>% 
+   select(wflow_id, .config, rmse = mean, rank)
+```
+
+Continue on...
+
+
+## Backward Selection
+
+See R Code below to manually code, but backward selection is not a recommended practice for variable/feature selection.
+
+### Full Model
+
+```{r}
+vars <- names(homes)
+vars <- vars[vars != 'Price']
+formulas <- list(formula(paste0('Price ~ ', paste0(vars, collapse = '+'))))
+names(formulas) <- 'full'
+
+homes_fullvarmodels <- workflow_set(preproc = formulas, models = list(lm = lm_spec))
+
+homes_fullvarmodels_fit <- homes_fullvarmodels %>%
+  workflow_map("fit_resamples", resamples = homes_cv10,  metrics = metric_set(rmse,rsq))
+
+homes_fullvarmodels_fit %>% 
+   rank_results() %>% 
+   filter(.metric == "rmse") %>% 
+   select(wflow_id, .config, rmse = mean, rank)
+```
+
+### Remove 1 from Model
+
+```{r}
+vars <- vars[vars != 'Price']
+
+formulas <- map(vars, ~ formula(paste0('Price ~ ',paste0(vars[vars != .x], collapse = '+'))))
+names(formulas) <- paste0('full-',vars)
+
+homes_rm1varmodels <- workflow_set(preproc = formulas,models = list(lm = lm_spec))
+
+homes_rm1varmodels_fit <- homes_rm1varmodels %>%
+  workflow_map("fit_resamples", resamples = homes_cv10,  metrics = metric_set(rmse,rsq))
+
+homes_rm1varmodels_fit %>% 
+   rank_results() %>% 
+   filter(.metric == "rmse") %>% 
+   select(wflow_id, .config, rmse = mean, rank) 
+```
+Removing Sewer Type gives the lowest error, meaning that removing it does the least harm to the predictive ability of the model. 
+
+### Remove 2 from Model
+
+
+```{r}
+vars <- vars[!(vars %in% c('Price','Sewer.Type'))]
+
+formulas <- map(vars, ~formula(paste0('Price ~ ',paste0(vars[vars != .x], collapse = '+'))))
+names(formulas) <- paste0('full-Sewer.Type-',vars)
+
+homes_rm2varmodels <- workflow_set(preproc = formulas, models = list(lm = lm_spec))
+
+homes_rm2varmodels_fit <- homes_rm2varmodels %>%
+  workflow_map("fit_resamples", resamples = homes_cv10,  metrics = metric_set(rmse,rsq))
+
+homes_rm2varmodels_fit %>% 
+   rank_results() %>% 
+   filter(.metric == "rmse") %>% 
+   select(wflow_id, .config, rmse = mean, rank)
+```
+
+Removing Fuel.Type gives the lowest error, meaning that removing it does the least harm to the predictive ability of the model. 
+
+
+### Remove 3 from Model
+
+
+```{r}
+vars <- vars[!(vars %in% c('Price','Sewer.Type','Fuel.Type'))]
+
+formulas <- map(vars, ~formula(paste0('Price ~ ',paste0(vars[vars != .x], collapse = '+'))))
+names(formulas) <- paste0('full-Sewer.Type-Fuel.Type',vars)
+
+homes_rm3varmodels <- workflow_set(preproc = formulas,models = list(lm = lm_spec))
+
+homes_rm3varmodels_fit <- homes_rm3varmodels %>%
+  workflow_map("fit_resamples", resamples = homes_cv10,  metrics = metric_set(rmse,rsq))
+
+homes_rm3varmodels_fit %>% 
+   rank_results() %>% 
+   filter(.metric == "rmse") %>% 
+   select(wflow_id, .config, rmse = mean, rank)
+```
+
+Removing AnyFireplaces gives the lowest error, meaning that removing it does the least harm to the predictive ability of the model. 
+
+### Remove 4 from Model
+
+
+```{r}
+vars <- vars[!(vars %in% c('Price','Sewer.Type','Fuel.Type','AnyFireplace'))]
+
+formulas <- map(vars, ~formula(paste0('Price ~ ',paste0(vars[vars != .x], collapse = '+'))))
+names(formulas) <- paste0('full-Sewer.Type-Fuel.Type-AnyFireplace-',vars)
+
+homes_rm4varmodels <- workflow_set(preproc = formulas,models = list(lm = lm_spec))
+
+homes_rm4varmodels_fit <- homes_rm4varmodels %>%
+  workflow_map("fit_resamples", resamples = homes_cv10,  metrics = metric_set(rmse,rsq))
+
+homes_rm4varmodels_fit %>% 
+   rank_results() %>% 
+   filter(.metric == "rmse") %>% 
+   select(wflow_id, .config, rmse = mean, rank)
+```
+Removing Fireplaces gives the lowest error, meaning that removing it does the least harm to the predictive ability of the model. 
+
+### Remove 5 from Model
+
+
+```{r}
+vars <- vars[!(vars %in% c('Price','Sewer.Type','Fuel.Type','AnyFireplace','Fireplaces'))]
+
+formulas <- map(vars, ~formula(paste0('Price ~ ',paste0(vars[vars != .x], collapse = '+'))))
+names(formulas) <- paste0('full-Sewer.Type-Fuel.Type-AnyFireplace-Fireplaces-',vars)
+
+homes_rm5varmodels <- workflow_set(preproc = formulas,models = list(lm = lm_spec))
+
+homes_rm5varmodels_fit <- homes_rm5varmodels %>%
+  workflow_map("fit_resamples", resamples = homes_cv10,  metrics = metric_set(rmse,rsq))
+
+homes_rm5varmodels_fit %>% 
+   rank_results() %>% 
+   filter(.metric == "rmse") %>% 
+   select(wflow_id, .config, rmse = mean, rank)
+```
+
+Removing Pct.College gives the lowest error, meaning that removing it does the least harm to the predictive ability of the model. 

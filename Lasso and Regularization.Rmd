@@ -1,0 +1,180 @@
+---
+title: "LASSO/Regularized Regression"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(readr)
+library(broom)
+library(ggplot2)
+library(tidymodels) 
+tidymodels_prefer() # Resolves conflicts, prefers tidymodel functions
+```
+
+## Read in Data from Video
+
+```{r}
+library(ISLR) #install.packages('ISLR')
+
+head(Credit)
+```
+
+
+## CV Fold Creation
+
+```{r}
+set.seed(123)
+Credit_cv10 <- vfold_cv(Credit, v = 10)
+```
+
+## LASSO: Model Specification
+
+```{r}
+lm_lasso_spec <- 
+  linear_reg() %>%
+  set_args(mixture = 1, penalty = 0) %>% ## mixture = 1 indicates Lasso, we'll talk about penalty later
+  set_engine(engine = 'glmnet') %>%
+  set_mode('regression') 
+```
+
+## LASSO: Fit Model
+
+```{r}
+Credit_rec <- recipe( Balance ~ . , data = Credit) %>%
+  update_role(ID, new_role = "ID") %>% # we don't want to use ID as predictor
+  step_novel(all_nominal_predictors()) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_nzv(all_predictors()) %>%
+  step_normalize(all_numeric_predictors())  # important step for LASSO
+
+lasso_wf_Credit <- workflow() %>% 
+  add_recipe(Credit_rec) %>%
+  add_model(lm_lasso_spec) 
+
+lasso_fit_Credit <- lasso_wf_Credit %>% 
+  fit(data = Credit) # Fit to entire data set (for now)
+
+tidy(lasso_fit_Credit) # penalty = 0; equivalent to lm
+
+plot(lasso_fit_Credit %>% extract_fit_parsnip() %>% pluck('fit'), # way to get the original glmnet output
+     xvar = "lambda") # glmnet fits the model with a variety of lambda penalty values
+```
+
+
+## LASSO: Tuning Parameters
+
+```{r}
+lm_lasso_spec_tune <- 
+  linear_reg() %>%
+  set_args(mixture = 1, penalty = tune()) %>% ## tune() indicates that we will try a variety of values
+  set_engine(engine = 'glmnet') %>%
+  set_mode('regression') 
+
+lasso_wf_Credit <- workflow() %>% 
+  add_recipe(Credit_rec) %>%
+  add_model(lm_lasso_spec_tune) 
+
+penalty_grid <- grid_regular(
+  penalty(range = c(-5, 3)), #log10 transformed 10^-5 to 10^3
+  levels = 50)
+
+tune_res <- tune_grid( # new function for tuning hyperparameters
+  lasso_wf_Credit, # workflow
+  resamples = Credit_cv10, # folds
+  metrics = metric_set(rmse),
+  grid = penalty_grid # penalty grid
+)
+
+autoplot(tune_res)
+
+collect_metrics(tune_res) %>%
+  filter(.metric == 'rmse') %>%
+  select(penalty, rmse = mean) 
+
+
+best_penalty <- select_best(tune_res, metric = 'rmse') # choose best penalty value
+
+Credit_final_wk <- finalize_workflow(lasso_wf_Credit, best_penalty) # incorporates penalty value to workflow
+
+Credit_final_fit <- fit(Credit_final_wk, data = Credit)
+
+tidy(Credit_final_fit)
+
+```
+
+## Ridge: Model Specification
+
+```{r}
+lm_ridge_spec <- 
+  linear_reg() %>%
+  set_args(mixture = 0, penalty = 0) %>% ## mixture = 0 indicates ridge reg
+  set_engine(engine = 'glmnet') %>%
+  set_mode('regression') 
+```
+
+## Ridge: Fit Model
+
+```{r}
+Credit_rec <- recipe( Balance ~ . , data = Credit) %>%
+  update_role(ID,new_role = "ID") %>%
+  step_novel(all_nominal_predictors()) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_nzv(all_predictors()) %>%
+  step_normalize(all_numeric_predictors())  # important for ridge regression too!
+
+ridge_wf_Credit <- workflow() %>% 
+  add_recipe(Credit_rec) %>%
+  add_model(lm_ridge_spec) 
+
+ridge_fit_Credit <- ridge_wf_Credit %>% 
+  fit(data = Credit)
+
+tidy(ridge_fit_Credit) #pentaly = 0; equivalent to lm
+
+plot(ridge_fit_Credit %>% extract_fit_parsnip() %>% pluck('fit'), 
+     xvar = "lambda")
+```
+
+
+## Ridge: Tuning Parameters
+
+```{r}
+lm_ridge_spec_tune <- 
+  linear_reg() %>%
+  set_args(mixture = 0, penalty = tune()) %>% 
+  set_engine(engine = 'glmnet') %>%
+  set_mode('regression') 
+
+ridge_wf_Credit <- workflow() %>% 
+  add_recipe(Credit_rec) %>%
+  add_model(lm_ridge_spec_tune) 
+
+penalty_grid <- grid_regular(
+  penalty(range = c(-5, 2)), 
+  levels = 50)
+
+tune_res <- tune_grid(
+  ridge_wf_Credit,
+  resamples = Credit_cv10, 
+  metrics = metric_set(rmse),
+  grid = penalty_grid
+)
+
+autoplot(tune_res)
+
+collect_metrics(tune_res) %>%
+  filter(.metric == 'rmse') %>%
+  select(penalty,rmse = mean) 
+
+
+best_penalty <- select_best(tune_res, metric = 'rmse')
+
+Credit_final_wk <- finalize_workflow(ridge_wf_Credit, best_penalty)
+
+Credit_final_fit <- fit(Credit_final_wk, data = Credit)
+
+tidy(Credit_final_fit)
+
+```
